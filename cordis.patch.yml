@@ -16,7 +16,7 @@
 #     无需重启（用 cordis_inspect_query 的 host/listTools 可直接看到 6 个 dual_* 工具）。
 #   · 装完之后又改了插件代码：运行中的 Host 不会重新加载（实测 toggle 插件、甚至换入口
 #     文件名都不生效）。此时必须完全退出 DSH Desktop 再打开。
-#     判断方法：dual_status 输出应有「运行时来源 : …」与「插件版本 : 0.2.0」两行。
+#     判断方法：dual_status 输出应有「运行时来源 : …」与「插件版本 : 0.2.1」两行。
 - insert:
     - id: dual-bridge
       name: 'dsh-dual-bridge'

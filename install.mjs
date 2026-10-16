@@ -127,9 +127,21 @@ function healthCheck() {
 }
 
 // ── 3. 安装 ────────────────────────────────────────────────────
+// 注意：dsh CLI 与插件目录都可能含空格（`DSH Desktop`、`DeepSeek Harness`），
+// Windows 下 `shell: true` 不会替我们给 argv 加引号，必须自己拼带引号的命令行。
+function quoteWin(s) {
+  return `"${String(s).replace(/"/g, '""')}"`
+}
+
 function runAdd(cli, what, cwd) {
   const args = ['plugin', '--profile', profile, 'add', what]
-  const r = spawnSync(cli, args, { stdio: 'inherit', shell: isWin, cwd })
+  const r = isWin
+    ? spawnSync([quoteWin(cli), ...args.map(quoteWin)].join(' '), {
+        stdio: 'inherit',
+        shell: true,
+        cwd,
+      })
+    : spawnSync(cli, args, { stdio: 'inherit', cwd })
   return r.status === 0
 }
 

@@ -22,7 +22,7 @@ export const inject = ['tools']
 // ─────────────────────────── 常量与默认值 ───────────────────────────
 
 const DEFAULT_SERVER_URL = 'https://dsh.r2049.cn'
-const VERSION = '0.2.0'
+const VERSION = '0.2.1'
 const DEFAULT_MODEL = 'workbuddy-xdpool-global/deepseek-v4.1-flash'
 const DEFAULT_TIMEOUT_MS = 600_000
 const FALLBACK_HARNESS_VERSION = '0.2.0-rc.2'
@@ -34,6 +34,13 @@ const SILENT = { info() {}, warn() {}, error() {}, debug() {} }
 //   · RPC harness.remote.call timed out after 60000ms  —— 死通道上的 RPC 拖到 60s 才超时
 //   · remote/disconnected / socket hang up / ECONNRESET —— 传输层已断
 const TRANSIENT_RE = /Noise channel is not connected|RPC .* timed out after|remote\/disconnected|socket hang up|ECONNRESET|not connected/i
+
+// 对端「上游模型供应商」拒绝的回合错误（不是通道问题，也不是本插件缺陷）。
+// 实测：公司机上 workbuddy-xdpool-global（国际版）会被 workbuddy 上游按渠道校验拦掉，
+// 报 code 11128 "conversation id missing" + displayTips「这次调用没通过渠道校验」；
+// 同一时刻原版脚本 dsh-remote-task.mjs 下发同样报 400，换 provider 为 workbuddy-xdpool（国内版）即通。
+// 触发条件在对端账号/渠道侧，改本机只能换 provider 或换对端模型。
+const UPSTREAM_RE = /workbuddy upstream client|conversation id missing|渠道校验|11128/i
 
 const text = (v) => [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }]
 const OUTPUT_STR = { schema: { type: 'string' }, render: (_args, value) => text(value) }
@@ -788,7 +795,14 @@ function toolDefs(bridge) {
 
         const body = replies.length ? replies.join('\n---\n') : '(没有文本回复)'
         const tail = turnError ? `\n\n⚠ 对端回合出错：${turnError}` : ''
-        return `${head}\n\n=== 对端回复 ===\n${body}${tail}`
+        // 对端上游渠道拒绝时附上可操作处置：换 provider / 换对端模型（属对端账号侧，本机改不了）
+        const hint = turnError && UPSTREAM_RE.test(turnError)
+          ? '\n\n💡 这是对端「上游模型供应商」按渠道校验拒绝（不是通道故障，也不是本插件缺陷）：' +
+            '换一个 provider 重试，例如把 model 传成 ' +
+            '`workbuddy-xdpool/deepseek-v4.1-flash`（国内版，实测可用）。\n' +
+            '   原版脚本 `dsh-remote-task.mjs` 在同一时刻下发会报同样的 400 —— 可据此区分「插件问题」与「对端渠道问题」。'
+          : ''
+        return `${head}\n\n=== 对端回复 ===\n${body}${tail}${hint}`
       },
     },
 
