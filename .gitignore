@@ -1,0 +1,23 @@
+# 依赖
+node_modules/
+pnpm-lock.yaml
+
+# 运行产物
+*.log
+dist/
+build/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地身份与配置（绝不提交）
+*.device.json
+device.key
+server-credentials.json
+trusted-peers.json
+.env
+.env.*

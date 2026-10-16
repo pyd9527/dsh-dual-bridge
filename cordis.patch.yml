@@ -1,0 +1,24 @@
+# 双向沟通桥：把已装的 ds-harness-remote 通道封装成模型可直接调用的工具。
+#
+# 依赖 ds-harness-remote（提供通道与身份），本插件自身不建立新身份、不重新登录、
+# 不切换本机 UI 的远端选择状态。
+#
+# 安装方式（二选一）：
+#   dsh plugin --profile <profile> add <本包目录绝对路径>
+#   或让 Agent 用 plugin_manager 的 install_bundle + 绝对包目录 target
+#
+# 生效方式：实测 install_bundle 返回 application:"applied" 时 Host 已热加载并注册工具，
+# 无需重启；若工具未出现，再完全退出 DSH Desktop 重新打开。
+- insert:
+    - id: dual-bridge
+      name: 'dsh-dual-bridge'
+      config:
+        # 7 个配置项全部可选，留空即用下面的默认行为。
+        serverUrl: https://dsh.r2049.cn
+        # defaultPeer: 我的另一台电脑          # 默认对端：名称或 deviceId；留空 = 第一个在线对端
+        # defaultWorkspace: 双向沟通     # 默认远端工作区：title / path / workspaceId
+        # defaultSession: session-xxxx   # 固定会话：填了就默认往这个会话发，对端 UI 可见、上下文连续
+        # defaultModel: provider/model   # 默认模型，如 workbuddy-xdpool-global/deepseek-v4.1-flash
+        # timeoutMs: 600000              # 单次等待对端回复的超时（毫秒）
+        connectMode: reuse
+        # autoWorkspace: true            # 新建会话时自动挑对端「最近更新」的工作区，保证对端 UI 侧栏可见
