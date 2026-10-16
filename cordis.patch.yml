@@ -1,24 +1,47 @@
 # 双向沟通桥：把已装的 ds-harness-remote 通道封装成模型可直接调用的工具。
 #
-# 依赖 ds-harness-remote（提供通道与身份），本插件自身不建立新身份、不重新登录、
+# 依赖 ds-harness-remote（提供通道与身份）。本插件自身不建立新身份、不重新登录、
 # 不切换本机 UI 的远端选择状态。
 #
-# 安装方式（二选一）：
-#   dsh plugin --profile <profile> add <本包目录绝对路径>
-#   或让 Agent 用 plugin_manager 的 install_bundle + 绝对包目录 target
+# 安装方式（三选一）：
+#   ① 会话内让 Agent 用 plugin_manager 的 install_bundle + 绝对包目录 target
+#   ② dsh plugin --profile <profile> add <本包目录绝对路径>
+#   ③ 包内自带的装机脚本：node install.mjs [--profile desktop] [--check]
 #
-# 生效方式：实测 install_bundle 返回 application:"applied" 时 Host 已热加载并注册工具，
-# 无需重启；若工具未出现，再完全退出 DSH Desktop 重新打开。
+# 生效方式（实测口径，分两种情形）：
+#   · 首次安装：install_bundle 返回 application:"applied" 时 Host 已热加载并注册工具，
+#     无需重启（用 cordis_inspect_query 的 host/listTools 可直接看到 6 个 dual_* 工具）。
+#   · 装完之后又改了插件代码：运行中的 Host 不会重新加载（实测 toggle 插件、甚至换入口
+#     文件名都不生效）。此时必须完全退出 DSH Desktop 再打开。
+#     判断方法：dual_status 输出应有「运行时来源 : …」与「插件版本 : 0.1.1」两行。
 - insert:
     - id: dual-bridge
       name: 'dsh-dual-bridge'
       config:
-        # 7 个配置项全部可选，留空即用下面的默认行为。
+        # 跨机通道：两台机必须同一个 relay + 同一个 DeepSeek 账号才会互相配对。
         serverUrl: https://dsh.r2049.cn
-        # defaultPeer: 我的另一台电脑          # 默认对端：名称或 deviceId；留空 = 第一个在线对端
-        # defaultWorkspace: 双向沟通     # 默认远端工作区：title / path / workspaceId
-        # defaultSession: session-xxxx   # 固定会话：填了就默认往这个会话发，对端 UI 可见、上下文连续
-        # defaultModel: provider/model   # 默认模型，如 workbuddy-xdpool-global/deepseek-v4.1-flash
-        # timeoutMs: 600000              # 单次等待对端回复的超时（毫秒）
+        # reuse = 缓存连接（只写自己的 this.connected，不碰本机 UI 的远端选择开关）
+        # connect = 每次调用前重新走一次建连检查
         connectMode: reuse
-        # autoWorkspace: true            # 新建会话时自动挑对端「最近更新」的工作区，保证对端 UI 侧栏可见
+        # 单次 dual_send 等对端回复的上限（毫秒）
+        timeoutMs: 600000
+        #
+        # ── 以下键都有合理默认值，按需打开注释即可 ──
+        #
+        # 固定对端（名称或 deviceId）；留空 = 取第一个在线对端
+        # defaultPeer: 我的另一台电脑
+        # 固定远端工作区（title / path / workspaceId）；留空 + autoWorkspace 开 = 取对端最近更新的工作区
+        # defaultWorkspace: 双向沟通
+        # 固定会话；填了就默认往这个会话发（对端 UI 可见、上下文连续），留空 = 按需新建
+        # defaultSession: session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        # 对端模型（必须带 provider 前缀，按第一个 / 切成 provider 与 model）
+        # defaultModel: workbuddy-xdpool-global/deepseek-v4.1-flash
+        # 没指定会话/工作区时是否自动挂对端最近更新的工作区（默认开）
+        #   —— 开着才能保证新会话在对端 UI 侧栏实时可见（仅传 cwd 的游离会话对端看不到）
+        # autoWorkspace: true
+        # 运行时来源：auto（默认，优先复用宿主 dshRemoteClient，健康探测失败自动退回自建）
+        #             own（始终自建，共用同一身份目录）/ host（只用宿主）
+        #   —— 若频繁看到「RPC harness.remote.call timed out after 60000ms」，设为 own
+        # runtimeMode: auto
+        # 连接健康探测超时（毫秒，默认 4000，最小 500）
+        # probeTimeoutMs: 4000

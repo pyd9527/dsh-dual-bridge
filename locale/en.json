@@ -1,4 +1,6 @@
 {
-  "title": "Dual Bridge",
-  "description": "Wraps the installed ds-harness-remote channel into model-callable tools: cross-machine messaging, reply capture, remote workspace and session listing. Reuses the existing identity and relay, zero-intrusion."
+  "meta": {
+    "title": "Dual Bridge",
+    "description": "Wraps the installed ds-harness-remote channel into model-callable tools: cross-machine messaging, reply capture, remote workspace and session listing. Reuses the existing identity and relay, zero-intrusion."
+  }
 }

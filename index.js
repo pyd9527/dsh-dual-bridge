@@ -22,6 +22,7 @@ export const inject = ['tools']
 // ─────────────────────────── 常量与默认值 ───────────────────────────
 
 const DEFAULT_SERVER_URL = 'https://dsh.r2049.cn'
+const VERSION = '0.1.1'
 const DEFAULT_MODEL = 'workbuddy-xdpool-global/deepseek-v4.1-flash'
 const DEFAULT_TIMEOUT_MS = 600_000
 const FALLBACK_HARNESS_VERSION = '0.2.0-rc.2'
@@ -264,39 +265,43 @@ class Bridge {
 
     let remote = await this.connectOnce(runtime, deviceId)
     let gateway = this.makeGateway(runtime, remote)
+    if (await probeGateway(gateway, this.cfg.probeTimeoutMs)) {
+      const entry = { gateway, remote }
+      this.gateways.set(deviceId, entry)
+      return entry
+    }
 
-    if (!(await probeGateway(gateway, this.cfg.probeTimeoutMs))) {
-      if (!this.ownsRuntime && this.cfg.runtimeMode === 'auto') {
-        // 宿主运行时这条路不可靠：整条切到自建运行时，后续调用不再走宿主。
-        await this.fallbackToOwn('宿主 dshRemoteClient 的连接不可用（健康探测超时）')
-        remote = await this.connectOnce(this.runtime, deviceId, { force: true })
-        gateway = this.makeGateway(this.runtime, remote)
-        if (!(await probeGateway(gateway, this.cfg.probeTimeoutMs))) {
-          throw Object.assign(new Error('连上了对端，但通道发不出请求。请确认对端 DSH 在线，或在 Remote 面板重新登录后重试。'), {
-            code: 'BRIDGE_CHANNEL_DEAD',
-          })
-        }
-      } else {
-        // 自建运行时：缓存里那条连接坏了，直接断掉重连一次。
-        try {
-          await remote?.client?.close?.()
-        } catch {
-          /* ignore */
-        }
-        this.gateways.delete(deviceId)
-        remote = await this.connectOnce(runtime, deviceId, { force: true })
-        gateway = this.makeGateway(runtime, remote)
-        if (!(await probeGateway(gateway, this.cfg.probeTimeoutMs))) {
-          throw Object.assign(new Error('连上了对端，但通道发不出请求。请确认对端 DSH 在线，或在 Remote 面板重新登录后重试。'), {
-            code: 'BRIDGE_CHANNEL_DEAD',
-          })
-        }
+    // 探测失败：先在本运行时内换一条新连接（关旧、强制重连）。
+    // 这是最轻的修法，不新增第二个运行时。
+    remote = await this.connectOnce(runtime, deviceId, { force: true })
+    gateway = this.makeGateway(runtime, remote)
+    if (await probeGateway(gateway, this.cfg.probeTimeoutMs)) {
+      const entry = { gateway, remote }
+      this.gateways.set(deviceId, entry)
+      return entry
+    }
+
+    // 还是不通。若是复用宿主运行时且允许回退，才退到自建运行时
+    // （同一身份目录，不新建身份、不重新登录）。自建运行时的连接已在上一步
+    // 强制重连过，仍然不通就是真不通，直接报错。
+    if (!this.ownsRuntime && this.cfg.runtimeMode === 'auto') {
+      await this.fallbackToOwn('宿主 dshRemoteClient 的连接不可用（健康探测两次失败）')
+      remote = await this.connectOnce(this.runtime, deviceId, { force: true })
+      gateway = this.makeGateway(this.runtime, remote)
+      if (await probeGateway(gateway, this.cfg.probeTimeoutMs)) {
+        const entry = { gateway, remote }
+        this.gateways.set(deviceId, entry)
+        return entry
       }
     }
 
-    const entry = { gateway, remote }
-    this.gateways.set(deviceId, entry)
-    return entry
+    throw Object.assign(
+      new Error(
+        '连上了对端，但通道发不出请求。请确认对端 DSH 在线；若对端刚重启过，稍等几秒重试；' +
+          '仍不行就在 Remote 面板重新登录一次（两台机同一账号）。',
+      ),
+      { code: 'BRIDGE_CHANNEL_DEAD' },
+    )
   }
 
   async connectOnce(runtime, deviceId, { force = false } = {}) {
@@ -477,6 +482,8 @@ function toolDefs(bridge) {
         lines.push('  身份来源   : ' + (bridge.ownsRuntime ? '本插件自建（共用同一身份目录）' : '复用宿主 dshRemoteClient'))
         lines.push('  连接状态   : ' + (st.connected ? `已连 ${st.transport}` : '未连接（按需建连）'))
         lines.push('  连接模式   : ' + cfg.connectMode)
+        lines.push('  运行时来源 : ' + cfg.runtimeMode + (bridge.fallbackReason ? '（已回退：' + bridge.fallbackReason + '）' : ''))
+        lines.push('  插件版本   : ' + VERSION)
         lines.push('')
         lines.push('【默认配置】')
         lines.push('  defaultPeer      : ' + (cfg.defaultPeer || '(未设，取第一个在线)'))

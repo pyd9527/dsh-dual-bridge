@@ -1,4 +1,6 @@
 {
-  "title": "双向沟通桥",
-  "description": "把已装的 ds-harness-remote 通道封装成模型可直接调用的工具：跨机发消息、取回复、列对端工作区与会话，复用现有身份与 relay，零侵入。"
+  "meta": {
+    "title": "双向沟通桥",
+    "description": "把已装的 ds-harness-remote 通道封装成模型可直接调用的工具：跨机发消息、取回复、列对端工作区与会话，复用现有身份与 relay，零侵入。"
+  }
 }
