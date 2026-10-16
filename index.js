@@ -22,7 +22,7 @@ export const inject = ['tools']
 // ─────────────────────────── 常量与默认值 ───────────────────────────
 
 const DEFAULT_SERVER_URL = 'https://dsh.r2049.cn'
-const VERSION = '0.1.1'
+const VERSION = '0.1.2'
 const DEFAULT_MODEL = 'workbuddy-xdpool-global/deepseek-v4.1-flash'
 const DEFAULT_TIMEOUT_MS = 600_000
 const FALLBACK_HARNESS_VERSION = '0.2.0-rc.2'
@@ -793,6 +793,92 @@ function toolDefs(bridge) {
   ]
 }
 
+// ─────────────────────────── 内置技能 ───────────────────────────
+//
+// 借 dsh-interconnect 的做法：把「怎么用这套工具」注册成一条 skill，
+// 模型不必翻 README 就知道该按什么顺序调、哪些坑不能踩。
+
+const SKILL_NAME = 'dual-bridge'
+
+function skillContent(cfg) {
+  const peer = cfg.defaultPeer || '（未固定，取第一个在线对端）'
+  const session = cfg.defaultSession || '（未固定，按需新建）'
+  const workspace = cfg.defaultWorkspace || '（未固定，取对端最近更新的工作区）'
+  return `# 双向沟通桥（dsh-dual-bridge）
+
+把本机与另一台电脑上的 DSH 打通：发消息过去、取回复回来、看对端有哪些工作区和会话。
+底层复用已装的 \`ds-harness-remote\` 通道（同一个 relay + 同一个 DeepSeek 账号即自动配对），
+本桥不新建身份、不重新登录、不改动本机 UI 的远端选择状态。
+
+## 当前配置
+- 对端（defaultPeer）   : ${peer}
+- 会话（defaultSession）: ${session}
+- 工作区（defaultWorkspace）: ${workspace}
+- 模型（defaultModel）  : ${cfg.defaultModel}
+- 自动挂工作区          : ${cfg.autoWorkspace ? '开' : '关'}
+
+## 工具与调用顺序
+
+| 工具 | 用途 | 何时用 |
+| --- | --- | --- |
+| \`dual_status\` | 自检：本机身份、relay、对端在线情况、运行时来源、插件版本 | 任何跨机操作之前先跑一次；排障也从它开始 |
+| \`dual_peers\` | 列出已配对且在线/离线的对端 | 需要确认目标名称或 deviceId 时 |
+| \`dual_workspaces\` | 列对端工作区（title / path / workspaceId / 会话数） | 想知道消息会落到对端哪个工作区时 |
+| \`dual_sessions\` | 列对端会话（可按 workspace 过滤、客户端排序分页） | 需要复用某个已有会话（上下文连续）时 |
+| \`dual_send\` | **发任务/消息给对端并等回复**（核心工具） | 派活、提问、让对端执行操作 |
+| \`dual_inbox\` | **只读**：取对端某个会话的最近消息 | 看对端回了什么、翻历史，不下发任务 |
+
+典型顺序：\`dual_status\` → （需要时 \`dual_workspaces\`/\`dual_sessions\`） → \`dual_send\` → 需要回看时 \`dual_inbox\`。
+
+## 关键约定
+
+1. **消息开头带方向标记**，让对端一眼看出是谁发的：
+   \`【私人机→公司机】…\` 或 \`【公司机→私人机】…\`。
+2. **要复用同一会话就把 \`session\` 传进去**（或用配置里的 \`defaultSession\`）。
+   传了会话，上下文连续、对端 UI 里就是同一条对话；
+   不传则新建——默认 \`autoWorkspace\` 会把新会话挂到**对端最近更新的工作区**，
+   这样对端 UI 侧栏才看得见（只传 cwd 的游离会话对端看不到）。
+3. **\`dual_send\` 是阻塞的**：它会一直等到对端这一轮 turn 结束（或超时 \`timeoutMs\`，默认 600 秒）。
+   长时间任务要显式传大一点的 \`timeoutMs\`；只想丢个通知不等回复时，别用 \`dual_send\`。
+4. **一次只发一件清楚的事**。对端是另一个 Agent，含糊的多目标指令容易只做一半。
+5. **\`dual_inbox\` 只读**：它不新建会话、不下发任务，纯粹读对端会话最近 N 条消息。
+
+## 组队思路（多台机器）
+
+- 每台机器装一次本插件（包内 \`install.mjs\` 一条命令：体检 → 找 dsh CLI → 缺通道自动补装 → 装本插件）。
+- 两台机用**同一个 DeepSeek 账号**登录**同一个 relay**（默认 \`https://dsh.r2049.cn\`）才会互相配对。
+- 把「谁负责什么」写成各自的固定会话（\`defaultSession\`），机器之间用 \`dual_send\` 互相派活，
+  每台机再各自开自己的 Agent 团队——跨机的分工靠会话标题与方向标记维持，不靠共享内存。
+
+## 排障速查
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| \`BRIDGE_NO_PEER\` | 没有任何在线对端 | 确认对端 DSH 开着、两边同一账号登录同一 relay |
+| \`BRIDGE_PEER_OFFLINE\` | 指定的对端离线 | 换 \`peer\`，或先让对端上线 |
+| \`RPC harness.remote.call timed out after 60000ms\` | 宿主缓存的连接已死 | 默认 \`runtimeMode: auto\` 会自动探测并退回自建运行时；仍复现就把 \`runtimeMode\` 设成 \`own\` |
+| \`BRIDGE_CHANNEL_DEAD\` | 连上了但通道发不出请求 | 让对端在 Remote 面板重新登录一次后重试 |
+| 对端 UI 看不到消息 | 会话是游离会话（\`autoWorkspace\` 被关且没给 \`workspace\`） | 保持 \`autoWorkspace: true\`，或显式给 \`workspace\` |
+| 工具报「没有这两个字段」之类 | 对端 DSH 版本较老，端点形状不同 | 本桥会自动换参数形状重试；仍失败说明该远端版本不支持该能力 |
+`
+}
+
+function registerSkill(ctx, cfg) {
+  if (!ctx.skills || typeof ctx.skills.register !== 'function') return
+  try {
+    ctx.skills.register({
+      name: SKILL_NAME,
+      description: '跨机双向沟通：给另一台电脑上的 DSH 发消息、取回复、看对端工作区与会话（dsh-dual-bridge 的 dual_* 工具用法与排障）。',
+      whenToUse: '需要与另一台电脑上的 DSH 互通（派活、提问、取对端回复、看对端会话），或 dual_* 工具报错需要排障时。',
+      content: skillContent(cfg),
+      invocation: { modelInvocable: true, userInvocable: true },
+      source: 'dsh-dual-bridge',
+    })
+  } catch {
+    /* 技能注册失败不影响工具可用 */
+  }
+}
+
 // ─────────────────────────── 插件入口 ───────────────────────────
 
 export function apply(ctx, config) {
@@ -804,6 +890,11 @@ export function apply(ctx, config) {
     const dispose = ctx.tools.register(def)
     if (typeof dispose === 'function') disposers.push(dispose)
   }
+
+  // 技能是可选能力：没有 skills 服务时工具照常可用。
+  ctx.inject(['skills'], (skillCtx) => {
+    registerSkill(skillCtx, cfg)
+  })
 
   ctx.effect(() => () => {
     for (const dispose of disposers.reverse()) {

@@ -82,24 +82,30 @@ function findDshCli() {
 // ── 2. 体检 ────────────────────────────────────────────────────
 function healthCheck() {
   log('【体检】')
+  const result = { profile: false, transport: false, self: false, identity: false }
   if (!existsSync(profileDir)) {
     bad(`profile 目录不存在：${profileDir}`)
     warn('请先打开一次 DSH Desktop（它会建好 profile），再跑本脚本。')
-    return false
+    return result
   }
   ok(`profile 目录：${profileDir}`)
+  result.profile = true
 
   const remoteDir = path.join(profileDir, 'node_modules', 'ds-harness-remote')
   const remoteEntry = path.join(remoteDir, 'dist', 'index.js')
-  if (existsSync(remoteEntry)) ok(`通道插件 ds-harness-remote 已装：${remoteDir}`)
-  else {
+  if (existsSync(remoteEntry)) {
+    ok(`通道插件 ds-harness-remote 已装：${remoteDir}`)
+    result.transport = true
+  } else {
     bad('通道插件 ds-harness-remote 没装 —— 本插件依赖它提供跨机通道与身份。')
     warn(`装它：dsh plugin --profile ${profile} add ds-harness-remote`)
   }
 
   const selfDir = path.join(profileDir, 'node_modules', 'dsh-dual-bridge')
-  if (existsSync(selfDir)) ok('dsh-dual-bridge 已挂进 profile')
-  else warn('dsh-dual-bridge 还没挂进 profile（本脚本接下来会装）')
+  if (existsSync(selfDir)) {
+    ok('dsh-dual-bridge 已挂进 profile')
+    result.self = true
+  } else warn('dsh-dual-bridge 还没挂进 profile（本脚本接下来会装）')
 
   // 身份目录：$DSH_HOME/remote/servers/<serverHash>/client/device.json
   const serversRoot = path.join(dshHome, 'remote', 'servers')
@@ -112,11 +118,12 @@ function healthCheck() {
   }
   if (identity) {
     ok(`本机 client 身份已存在：${identity}`)
+    result.identity = true
   } else {
     warn('本机还没有 client 身份。装完插件后，在 DSH 的 Remote 面板用 DeepSeek 账号登录一次即可生成。')
     warn('两台机必须用同一个 DeepSeek 账号登录同一个 relay（默认 https://dsh.r2049.cn），才会互相配对。')
   }
-  return true
+  return result
 }
 
 // ── 3. 安装 ────────────────────────────────────────────────────
@@ -167,12 +174,17 @@ log(`  插件目录 : ${pkgDir}`)
 log(`  profile  : ${profile}`)
 log(`  DSH_HOME : ${dshHome}`)
 
-const healthy = healthCheck()
+const health = healthCheck()
 const cli = findDshCli()
 
 if (checkOnly) {
   log('\n【dsh CLI】' + (cli ? ' ' + cli : ' 没找到'))
-  process.exit(healthy && cli ? 0 : 2)
+  const okAll = health.profile && health.transport && health.identity && Boolean(cli)
+  if (health.self) log('  · 本插件已挂进 profile')
+  log('\n【体检结论】' + (okAll ? '正常，可以装/已可直用' : '有缺项（见上面 ✗ / !）'))
+  log('  profile / 通道 / 身份 / dsh CLI 四项：' + [health.profile, health.transport, health.identity, Boolean(cli)].map((v) => (v ? 'OK' : '缺')).join(' / '))
+  if (!health.transport && !withTransport) log('  （--no-transport：本脚本不会替你补装通道）')
+  process.exit(okAll ? 0 : 2)
 }
 
 if (!cli) {
