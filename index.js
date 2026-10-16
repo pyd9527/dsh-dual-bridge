@@ -22,7 +22,7 @@ export const inject = ['tools']
 // ─────────────────────────── 常量与默认值 ───────────────────────────
 
 const DEFAULT_SERVER_URL = 'https://dsh.r2049.cn'
-const VERSION = '0.2.1'
+const VERSION = '0.2.2'
 const DEFAULT_MODEL = 'workbuddy-xdpool-global/deepseek-v4.1-flash'
 const DEFAULT_TIMEOUT_MS = 600_000
 const FALLBACK_HARNESS_VERSION = '0.2.0-rc.2'

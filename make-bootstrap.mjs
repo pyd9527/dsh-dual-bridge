@@ -61,6 +61,7 @@ const bootstrap = `#!/usr/bin/env node
 // 用法（新电脑上）：
 //   node bootstrap.mjs                     # 物化插件 → 体检 → 找 dsh CLI → 补装通道 → 装插件
 //   node bootstrap.mjs --check             # 只体检（不写盘、不安装）
+//   node bootstrap.mjs --verify            # 只自检内联载荷：物化到临时目录并逐文件比对 SHA256，不碰 profile
 //   node bootstrap.mjs --profile web       # 装进别的 profile
 //   node bootstrap.mjs --keep              # 保留物化出来的插件目录（默认也保留，方便改配置）
 //   node bootstrap.mjs --dir <目录>        # 指定物化位置（默认 <当前目录>/dsh-dual-bridge）
@@ -68,9 +69,12 @@ const bootstrap = `#!/usr/bin/env node
 // 本文件由 make-bootstrap.mjs 从插件包生成，版本 ${pkg.version}，内联 ${files.length} 个文件 / ${totalBytes} 字节。
 // 它只做四件事：物化 → 体检 → 缺 ds-harness-remote 就补装 → dsh plugin add 本插件。
 // 不写 profile 文件、不改 ds-harness-remote 本体、不碰身份目录。
+// ⚠ --dir 指向的目录**会**被 dsh plugin add 写进 profile 依赖。只想验证别用 --dir，
+//   用 --verify（临时目录，不安装）；切勿把 --dir 指到会被删掉的临时目录再跑完整安装。
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -92,6 +96,7 @@ const has = (name) => argv.includes(name)
 const pkgDir = path.resolve(arg('--dir', path.join(process.cwd(), 'dsh-dual-bridge')))
 const profile = arg('--profile', process.env.DSH_PROFILE || 'desktop')
 const checkOnly = has('--check')
+const verifyOnly = has('--verify')
 const withTransport = !has('--no-transport')
 
 const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
@@ -252,9 +257,44 @@ function install(cli) {
 // ── 主流程 ─────────────────────────────────────────────────────
 log('dsh-dual-bridge 自包含装机助手')
 log(\`  插件版本 : \${PKG_VERSION}\`)
-log(\`  物化到   : \${pkgDir}\`)
 log(\`  profile  : \${profile}\`)
 log(\`  DSH_HOME : \${dshHome}\`)
+
+// ── --verify：只自检内联载荷，物化到临时目录比对 SHA256，绝不碰 profile ──
+if (verifyOnly) {
+  const tmp = path.join(os.tmpdir(), 'dsh-dual-bridge-verify-' + Date.now())
+  log(\`\\n【自检】物化到临时目录：\${tmp}\`)
+  let n = 0
+  for (const [rel, b64] of Object.entries(PAYLOAD)) {
+    const abs = path.join(tmp, rel)
+    mkdirSync(path.dirname(abs), { recursive: true })
+    writeFileSync(abs, Buffer.from(b64, 'base64'))
+    n++
+  }
+  let okCount = 0
+  const problems = []
+  for (const [rel, b64] of Object.entries(PAYLOAD)) {
+    const abs = path.join(tmp, rel)
+    const want = createHash('sha256').update(Buffer.from(b64, 'base64')).digest('hex')
+    const got = createHash('sha256').update(readFileSync(abs)).digest('hex')
+    if (want === got) okCount++
+    else problems.push(\`\${rel}：载荷 \${want.slice(0, 12)} vs 落盘 \${got.slice(0, 12)}\`)
+  }
+  log(\`  内联文件：\${n} 个\`)
+  log(\`  载荷与落盘一致：\${okCount} / \${n}\`)
+  if (problems.length) {
+    for (const p of problems) bad(p)
+    warn(\`临时目录保留供排查：\${tmp}\`)
+    process.exit(1)
+  }
+  ok('内联载荷自检通过（未安装、未写 profile）')
+  log('  清理临时目录：' + tmp)
+  rmSync(tmp, { recursive: true, force: true })
+  log('\\n【结论】bootstrap 载荷完好。装到新机器请直接运行：node bootstrap.mjs')
+  process.exit(0)
+}
+
+log(\`  物化到   : \${pkgDir}\`)
 
 if (!checkOnly) materialize()
 else log('（--check：只体检，不物化、不安装）')
@@ -286,6 +326,10 @@ log('\\n【接下来三步】')
 log('  1. 让 Agent 调 dual_status 自检（首次安装即热加载，通常不用重启）。')
 log('  2. 在 DSH 的 Remote 面板用 DeepSeek 账号登录同一个 relay（两台机同一账号）。')
 log('  3. dual_status 应看到本机身份、relay、以及对端设备在线。')
+log('')
+log('  ⚠ 本脚本已把 ' + pkgDir + ' 写进 profile 依赖。')
+log('    该目录**不要删、不要改名**，否则依赖会悬空（表现为插件加载失败）。')
+log('    想验证载荷而不要安装，下次用：node bootstrap.mjs --verify')
 log('')
 log('  默认零配置即可用：会取第一个在线对端 + 对端最近更新的工作区 + 新建会话，')
 log('  对端 UI 侧栏实时可见。想固定成老习惯（复用同一会话）就在 profile 的')

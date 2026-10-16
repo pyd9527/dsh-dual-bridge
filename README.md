@@ -3,7 +3,7 @@
 把已装的 `ds-harness-remote` 通道封装成模型可以直接调用的工具：跨机发一段话、取回对端回复、列对端工作区与会话。复用现有身份与 relay，不新建身份、不重复登录、不改动原插件与原脚本。
 
 - 包类型：Host 插件（无 UI 客户端代码），`export function apply(ctx, config)`
-- 当前版本：`0.2.1`（0.2.1 起内置「通道自愈」，见第四节）
+- 当前版本：`0.2.2`（0.2.1 起内置「通道自愈」，见第四节）
 - 依赖：本机已装并已登录 `ds-harness-remote`。插件优先 `ctx.get('dshRemoteClient')` 复用宿主的运行时；拿不到就自建一个 `ClientModeRuntime`，**共用同一份身份目录**（`$DSH_HOME\remote\servers\<serverHash>\client`），不新建身份、不重新登录
 - 不提供：新账号体系、新的 relay 服务、对端的任何写操作（只发消息、建会话、读会话快照）
 
@@ -105,8 +105,8 @@ target = "D:\plugins\dsh-dual-bridge"
 让模型调用 `dual_status`，应看到本机 Remote 身份、relay 连接状态、运行时来源与插件版本；再调 `dual_peers`，应看到对端为 `在线`。
 
 > ⚠ **例外：改过插件自身的代码之后，必须完全退出 DSH Desktop 再打开。**
-> 首次安装（`install_bundle` 返回 `application: "applied"`）确实是热加载、装完即用；但**装完之后再改插件代码，运行中的 Host 不会重新加载** —— 实测改内容后 toggle 插件不生效、把入口改名（`impl-0.2.1.js`）不生效、再改名（`bridge.js`）并改 `package.json` 的 `exports` 也不生效，`dual_status` 始终返回旧版输出（Host 里的 ESM 模块缓存不会被清掉）。而用新进程 `import()` 同一个文件，新版代码立刻生效。⇒ **改代码后一律完全退出 DSH Desktop 再打开。**
-> **判断方法**：`dual_status` 输出里应有「运行时来源 : …」与「插件版本 : 0.2.1」两行。**没有这两行，就是在跑旧代码。**
+> 首次安装（`install_bundle` 返回 `application: "applied"`）确实是热加载、装完即用；但**装完之后再改插件代码，运行中的 Host 不会重新加载** —— 实测改内容后 toggle 插件不生效、把入口改名（`impl-0.1.2.js`）不生效、再改名（`bridge.js`）并改 `package.json` 的 `exports` 也不生效，`dual_status` 始终返回旧版输出（Host 里的 ESM 模块缓存不会被清掉）。而用新进程 `import()` 同一个文件，新版代码立刻生效。⇒ **改代码后一律完全退出 DSH Desktop 再打开。**
+> **判断方法**：`dual_status` 输出里应有「运行时来源 : …」与「插件版本 : 0.2.2」两行。**没有这两行，就是在跑旧代码。**
 
 **如果工具没出现**，再完全退出 DSH Desktop（确认进程真的退出，含托盘与后台进程）重新打开一次。
 
@@ -192,7 +192,7 @@ target = "D:\plugins\dsh-dual-bridge"
 
 `dual_send` 的返回包含：对端名称、会话 id（标注新建/复用）、工作区（自动选取时会注明）、模型、耗时、对端用到的工具，然后是 `=== 对端回复 ===` 正文。
 
-### `dual_status` 输出样例（0.2.1）
+### `dual_status` 输出样例（0.2.2）
 
 ```
 【本机】
@@ -203,7 +203,7 @@ target = "D:\plugins\dsh-dual-bridge"
   连接状态   : 已连 relay                      ← 或「未连接（按需建连）」
   连接模式   : reuse
   运行时来源 : auto                            ← 回退时显示 auto（已回退：<原因>）
-  插件版本   : 0.2.1
+  插件版本   : 0.2.2
 
 【默认配置】
   defaultPeer      : <见本机配置>
@@ -225,14 +225,14 @@ target = "D:\plugins\dsh-dual-bridge"
 
 技能里会**代入本机实际配置**（当前 `defaultPeer` / `defaultSession` / `defaultWorkspace` / `defaultModel` / `autoWorkspace`），所以换机器后技能内容自动跟着变，不用手工维护。若 profile 里没有 `skills` 服务，技能注册会被静默跳过，**6 个工具照常可用**。
 
-### 实测样例（v0.2.1，私人机 → 公司机）
+### 实测样例（v0.2.2，私人机 → 公司机）
 
 以下是真机跑通的行为，可当作「它能干什么」的参考。具体 id 请以本机 `dual_peers` / `dual_workspaces` / `dual_sessions` 的输出为准，不写进文档。
 
 | 动作 | 实测结果 |
 | --- | --- |
 | `dual_workspaces` | 列出对端 4 个工作区：双向沟通（`D:\remote\workspace`，6 个会话）、记忆中枢、日常工作（9 个会话）、default-workspace |
-| `dual_send`（复用固定会话） | 对端回复「桥已就绪 v0.1」/「插件通道 OK」，单次耗时 6.8 ~ 7.6 秒（「v0.1」是对端回话原文，非插件版本号；插件版本为 0.2.1） |
+| `dual_send`（复用固定会话） | 对端回复「桥已就绪 v0.1」/「插件通道 OK」，单次耗时 6.8 ~ 7.6 秒（「v0.1」是对端回话原文，非插件版本号；插件版本为 0.2.2） |
 | `dual_inbox {limit:2}` | 只读读到该会话最近 2 条（一条用户消息 + 一条对端助手回复） |
 | `autoWorkspace` 兜底 | 不配任何 workspace/session 时新建会话，对端 UI 侧栏**能看到**；实测两个兜底会话的 cwd 都是 `D:\remote\workspace`（即对端「最近更新」的工作区） |
 
@@ -287,6 +287,7 @@ target = "D:\plugins\dsh-dual-bridge"
 | 报 `gateway/invocation-unavailable` / `no active Remote method exports this endpoint` | **对端 DSH 版本没有这个能力**（不是形状错）。插件对远端端点做形状自适应调用：`invoke` 先试 `args:{request}`，报 `missing "_request"` / `unexpected "request"` 就改 `{_request}`，再报反向错误就改平铺；若对端确实没导出该端点，远端只会回这条 | 换用 `dual_peers` / `dual_sessions` 等基础工具，或升级对端 DSH。本插件不因版本差异报错 |
 | `dual_inbox` 报 `BRIDGE_NO_SESSION` | 没给 `session` 参数，配置里也没有 `defaultSession` | 先用 `dual_sessions` 查会话 id 再传 `session`；或把常用会话写进 `defaultSession` |
 | `dual_inbox` 取不到内容 | 会话 id 失效，或对端那条会话还没回复 | 先用 `dual_sessions` 确认会话仍在；必要时用 `dual_send` 带 `workspace` 新建会话 |
+| 对端回合报 `400 ... workbuddy upstream client ... "conversation id missing"` / `code 11128`，提示「这次调用没通过渠道校验」 | **对端机器上该 provider 的上游通道被模型供应商按渠道校验拦掉**（触发条件在对端账号/渠道侧）。**不是通道故障，也不是本插件缺陷** —— 同一时刻原版脚本 `dsh-remote-task.mjs` 下发会报**一模一样**的 400 | 换一个 provider 重试：`dual_send` 传 `model`，例如 `workbuddy-xdpool/deepseek-v4.1-flash`（国内版，实测可用；默认的 `workbuddy-xdpool-global` 国际版在部分对端账号上会被拦）。`dual_send` 检测到这类错误会直接在输出里给出这条提示 |
 
 ---
 
