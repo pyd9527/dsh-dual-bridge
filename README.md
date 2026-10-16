@@ -9,6 +9,42 @@
 
 ---
 
+## 快速开始（新电脑只拷一个文件）
+
+```powershell
+node bootstrap.mjs
+```
+
+`bootstrap.mjs` 把整包 8 个文件 base64 内联在自己身上 —— **新机器上只需要拷这一个文件**，跑一条命令就完成「物化插件 → 体检 → 找 `dsh` CLI → 缺通道自动补装 → 装本插件」。装完在 DSH 里调一次 `dual_peers` 看到对端就是通了。
+
+```powershell
+node bootstrap.mjs --check        # 只体检，不写盘
+node bootstrap.mjs --profile web  # 装进其它 profile（默认 desktop）
+```
+
+前提：两端用**同一个账号**登录 Remote 面板，且本机已装 `ds-harness-remote`（`bootstrap.mjs` 会替你补装）。
+
+---
+
+## 版本
+
+每个版本一个提交 + 一个 tag，可逐个检出对照演进：
+
+| Tag | 主题 |
+| --- | --- |
+| [`v0.1.0`](../../releases/tag/v0.1.0) | 首个可用版本：6 个 `dual_*` 工具，复用现有身份与中继，零侵入收发 |
+| [`v0.1.1`](../../releases/tag/v0.1.1) | 加入插件 `VERSION` 常量；补齐首版 README 与 bundle patch |
+| [`v0.1.2`](../../releases/tag/v0.1.2) | 新增 `install.mjs` 装机脚本 |
+| [`v0.2.0`](../../releases/tag/v0.2.0) | 新增 `autoWorkspace` 兜底、`runtimeMode`、`probeTimeoutMs` |
+| [`v0.2.1`](../../releases/tag/v0.2.1) | 三层通道自愈 |
+| [`v0.2.2`](../../releases/tag/v0.2.2) | 单文件装机入口 `bootstrap.mjs` + 生成器 + `--verify` |
+
+```powershell
+git checkout v0.2.2   # 检出任意版本
+```
+
+---
+
 ## 一、装插件三步
 
 ### 第 1 步：把包放进机器并安装
