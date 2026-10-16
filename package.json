@@ -1,6 +1,6 @@
 {
   "name": "dsh-dual-bridge",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "双向沟通桥：把已装的 ds-harness-remote 通道封装成模型可直接调用的跨机工具（发消息、取回复、列对端工作区与会话），复用现有身份与 relay，零侵入。",

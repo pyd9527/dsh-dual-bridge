@@ -22,12 +22,18 @@ export const inject = ['tools']
 // ─────────────────────────── 常量与默认值 ───────────────────────────
 
 const DEFAULT_SERVER_URL = 'https://dsh.r2049.cn'
-const VERSION = '0.1.2'
+const VERSION = '0.2.0'
 const DEFAULT_MODEL = 'workbuddy-xdpool-global/deepseek-v4.1-flash'
 const DEFAULT_TIMEOUT_MS = 600_000
 const FALLBACK_HARNESS_VERSION = '0.2.0-rc.2'
 const PLUGIN_DIR = 'ds-harness-remote'
 const SILENT = { info() {}, warn() {}, error() {}, debug() {} }
+
+// 「通道掉了」这类可恢复错误的特征。命中就丢缓存连接、强制重连再重试一次。
+//   · The authenticated Noise channel is not connected. —— P2P 通道静默失效后的第一次调用
+//   · RPC harness.remote.call timed out after 60000ms  —— 死通道上的 RPC 拖到 60s 才超时
+//   · remote/disconnected / socket hang up / ECONNRESET —— 传输层已断
+const TRANSIENT_RE = /Noise channel is not connected|RPC .* timed out after|remote\/disconnected|socket hang up|ECONNRESET|not connected/i
 
 const text = (v) => [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }]
 const OUTPUT_STR = { schema: { type: 'string' }, render: (_args, value) => text(value) }
@@ -260,7 +266,13 @@ class Bridge {
     const runtime = await this.runtimeOf()
     if (this.cfg.connectMode === 'reuse') {
       const cached = this.gateways.get(deviceId)
-      if (cached && cached.remote?.client && !cached.remote.client.closed) return cached
+      if (cached && cached.remote?.client && !cached.remote.client.closed) {
+        // 缓存里的连接也必须探活：`client.closed` 为 false 不等于 Noise 握手还在
+        // （实测会撞上 "The authenticated Noise channel is not connected."）。
+        // 探测是一次最便宜的只读调用，失败就丢掉缓存、重新建连。
+        if (await probeGateway(cached.gateway, this.cfg.probeTimeoutMs)) return cached
+        this.gateways.delete(deviceId)
+      }
     }
 
     let remote = await this.connectOnce(runtime, deviceId)
@@ -339,6 +351,38 @@ class Bridge {
       }
       throw err
     }
+  }
+
+  /**
+   * 带自愈的执行：拿网关 → 跑 fn(gateway)；若撞上「通道掉了/超时」这类可恢复错误，
+   * 丢掉缓存连接、强制重连，再重试一次。
+   *
+   * 触发条件来自实测：P2P 通道会静默失效，此后第一次调用报
+   * `The authenticated Noise channel is not connected.`，或者一路等到
+   * `RPC harness.remote.call timed out after 60000ms`。这两种都不是配置错，
+   * 重连一次即可恢复（原版脚本之所以从不出这个问题，是因为它每次都是新进程、
+   * 每次重新建连；插件是长驻进程，必须自己处理）。
+   */
+  async call(deviceId, fn, { signal } = {}) {
+    let lastErr
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { gateway } = await this.gatewayFor(deviceId)
+      try {
+        return await fn(gateway)
+      } catch (err) {
+        lastErr = err
+        const msg = String(err?.message ?? err)
+        if (!TRANSIENT_RE.test(msg)) throw err
+        this.gateways.delete(deviceId)
+        try {
+          await this.connectOnce(await this.runtimeOf(), deviceId, { force: true })
+        } catch {
+          /* 重连失败就让下一轮 gatewayFor 自己去探 */
+        }
+        if (signal?.aborted) throw err
+      }
+    }
+    throw lastErr
   }
 
   async close() {
@@ -533,8 +577,7 @@ function toolDefs(bridge) {
       output: OUTPUT_STR,
       async execute(args, exec) {
         const { peer } = await bridge.resolvePeer(args?.peer)
-        const { gateway } = await bridge.gatewayFor(peer.deviceId)
-        const items = await listWorkspaces(bridge, gateway, exec?.signal)
+        const items = await bridge.call(peer.deviceId, (gateway) => listWorkspaces(bridge, gateway, exec?.signal), { signal: exec?.signal })
         if (items.length === 0) return `对端「${peer.name}」没有工作区。`
         return (
           `对端「${peer.name}」的工作区（${items.length} 个）：\n` +
@@ -560,21 +603,29 @@ function toolDefs(bridge) {
       output: OUTPUT_STR,
       async execute(args, exec) {
         const { peer } = await bridge.resolvePeer(args?.peer)
-        const { gateway } = await bridge.gatewayFor(peer.deviceId)
         const limit = Number.isFinite(Number(args?.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : 30
-        let sessions = (await listSessions(bridge, gateway, exec?.signal)).map(sessionSummary)
-        let scope = ''
-        if (args?.workspace) {
-          const items = await listWorkspaces(bridge, gateway, exec?.signal)
-          const ws = pickWorkspace(items, args.workspace, null)
-          if (ws) {
-            const ids = new Set(ws.sessionIds ?? [])
-            sessions = sessions.filter((s) => ids.has(s.sessionId))
-            scope = `（工作区「${ws.title}」）`
-          } else {
-            scope = `（未匹配到工作区「${args.workspace}」，返回全部）`
-          }
-        }
+        const wantWorkspace = args?.workspace
+        const result = await bridge.call(
+          peer.deviceId,
+          async (gateway) => {
+            let sessions = (await listSessions(bridge, gateway, exec?.signal)).map(sessionSummary)
+            let scope = ''
+            if (wantWorkspace) {
+              const items = await listWorkspaces(bridge, gateway, exec?.signal)
+              const ws = pickWorkspace(items, wantWorkspace, null)
+              if (ws) {
+                const ids = new Set(ws.sessionIds ?? [])
+                sessions = sessions.filter((s) => ids.has(s.sessionId))
+                scope = `（工作区「${ws.title}」）`
+              } else {
+                scope = `（未匹配到工作区「${wantWorkspace}」，返回全部）`
+              }
+            }
+            return { sessions, scope }
+          },
+          { signal: exec?.signal },
+        )
+        let { sessions, scope } = result
         sessions.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
         const shown = sessions.slice(0, limit)
         if (shown.length === 0) return `对端「${peer.name}」没有会话${scope}。`
@@ -612,52 +663,61 @@ function toolDefs(bridge) {
         const message = typeof args?.message === 'string' ? args.message : ''
         if (!message.trim()) throw Object.assign(new Error('message 不能为空'), { code: 'BRIDGE_EMPTY_MESSAGE' })
         const { peer } = await bridge.resolvePeer(args?.peer)
-        const { gateway } = await bridge.gatewayFor(peer.deviceId)
 
         const modelSpec = (typeof args?.model === 'string' && args.model.includes('/') ? args.model : cfg.defaultModel).trim()
         const slash = modelSpec.indexOf('/')
         const provider = modelSpec.slice(0, slash)
         const model = modelSpec.slice(slash + 1)
 
-        // 1) 定会话
-        let sessionId = (typeof args?.session === 'string' && args.session.trim()) || cfg.defaultSession || ''
-        let created = false
-        let workspaceLabel = ''
-        if (!sessionId) {
-          const wantWs = args?.workspace || cfg.defaultWorkspace
-          let ws = null
-          const items = wantWs || cfg.autoWorkspace ? await listWorkspaces(bridge, gateway, exec?.signal) : []
-          if (wantWs) {
-            ws = pickWorkspace(items, wantWs, /^[0-9a-fA-F-]{36}$/.test(wantWs) ? wantWs : null)
-            if (!ws && /^[0-9a-fA-F-]{36}$/.test(wantWs)) {
-              throw Object.assign(new Error('workspaceId 未命中：' + wantWs), { code: 'BRIDGE_WORKSPACE_NOT_FOUND' })
+        // 1) 定会话 + 选模型。放在 call() 里：若撞上通道掉线，这一步会整体重做
+        //    （此时消息还没发出去，重做是安全的）。
+        const setup = await bridge.call(
+          peer.deviceId,
+          async (gateway) => {
+            let sessionId = (typeof args?.session === 'string' && args.session.trim()) || cfg.defaultSession || ''
+            let created = false
+            let workspaceLabel = ''
+            if (!sessionId) {
+              const wantWs = args?.workspace || cfg.defaultWorkspace
+              let ws = null
+              const items = wantWs || cfg.autoWorkspace ? await listWorkspaces(bridge, gateway, exec?.signal) : []
+              if (wantWs) {
+                ws = pickWorkspace(items, wantWs, /^[0-9a-fA-F-]{36}$/.test(wantWs) ? wantWs : null)
+                if (!ws && /^[0-9a-fA-F-]{36}$/.test(wantWs)) {
+                  throw Object.assign(new Error('workspaceId 未命中：' + wantWs), { code: 'BRIDGE_WORKSPACE_NOT_FOUND' })
+                }
+              }
+              if (!ws && cfg.autoWorkspace) {
+                // 兜底：挑对端「最近更新」的工作区。这样建出来的会话一定挂在对端工作区上，
+                // 对端 UI 侧栏实时可见（否则就是游离会话，对端根本看不到）。
+                ws = [...items].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0] ?? null
+                if (ws) workspaceLabel = `${ws.title} (${ws.path})  [自动选取：最近更新]`
+              }
+              const request = ws ? { workspaceId: ws.workspaceId } : {}
+              const res = await bridge.invoke(gateway, 'session', 'create', request, exec?.signal)
+              sessionId = res?.sessionId
+              created = true
+              if (ws) workspaceLabel = workspaceLabel || `${ws.title} (${ws.path})`
+              else workspaceLabel = '(游离会话，对端 UI 侧栏不可见)'
+              if (!sessionId) throw Object.assign(new Error('对端未返回新会话 id：' + JSON.stringify(res)), { code: 'BRIDGE_CREATE_FAILED' })
             }
-          }
-          if (!ws && cfg.autoWorkspace) {
-            // 兜底：挑对端「最近更新」的工作区。这样建出来的会话一定挂在对端工作区上，
-            // 对端 UI 侧栏实时可见（否则就是游离会话，对端根本看不到）。
-            ws = [...items].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0] ?? null
-            if (ws) workspaceLabel = `${ws.title} (${ws.path})  [自动选取：最近更新]`
-          }
-          const request = ws ? { workspaceId: ws.workspaceId } : {}
-          const res = await bridge.invoke(gateway, 'session', 'create', request, exec?.signal)
-          sessionId = res?.sessionId
-          created = true
-          if (ws) workspaceLabel = workspaceLabel || `${ws.title} (${ws.path})`
-          else workspaceLabel = '(游离会话，对端 UI 侧栏不可见)'
-          if (!sessionId) throw Object.assign(new Error('对端未返回新会话 id：' + JSON.stringify(res)), { code: 'BRIDGE_CREATE_FAILED' })
-        }
 
-        // 2) 选模型
-        let modelNote = ''
-        try {
-          await bridge.invoke(gateway, 'session', 'selectModel', { sessionId, provider, model }, exec?.signal)
-          modelNote = `${provider}/${model}`
-        } catch (err) {
-          modelNote = `沿用对端当前模型（设置失败：${err?.message ?? err}）`
-        }
+            let modelNote = ''
+            try {
+              await bridge.invoke(gateway, 'session', 'selectModel', { sessionId, provider, model }, exec?.signal)
+              modelNote = `${provider}/${model}`
+            } catch (err) {
+              modelNote = `沿用对端当前模型（设置失败：${err?.message ?? err}）`
+            }
+            return { gateway, sessionId, created, workspaceLabel, modelNote }
+          },
+          { signal: exec?.signal },
+        )
 
-        // 3) 起流 + 下发
+        const { gateway, sessionId, created, workspaceLabel, modelNote } = setup
+
+        // 2) 起流 + 下发。这一段不再自动重试：prompt 一旦被对端接受，
+        //    重试会把同一条消息发第二遍。失败就如实报出来。
         const timeoutMs = Number.isFinite(Number(args?.timeoutMs)) && Number(args.timeoutMs) >= 5000 ? Number(args.timeoutMs) : cfg.timeoutMs
         const ac = new AbortController()
         const onAbort = () => ac.abort()
@@ -755,8 +815,11 @@ function toolDefs(bridge) {
           })
         }
         const limit = Number.isFinite(Number(args?.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : 20
-        const { gateway } = await bridge.gatewayFor(peer.deviceId)
-        const snapshot = await readSnapshot(gateway, sessionId, exec?.signal)
+        const snapshot = await bridge.call(
+          peer.deviceId,
+          (gateway) => readSnapshot(gateway, sessionId, exec?.signal),
+          { signal: exec?.signal },
+        )
         if (!snapshot) return `对端「${peer.name}」会话 ${sessionId} 没有读到快照（可能会话不存在或对端无响应）。`
 
         const msgs = []
@@ -892,9 +955,15 @@ export function apply(ctx, config) {
   }
 
   // 技能是可选能力：没有 skills 服务时工具照常可用。
-  ctx.inject(['skills'], (skillCtx) => {
-    registerSkill(skillCtx, cfg)
-  })
+  // 优先走 ctx.inject(['skills'])（等 skills 服务就绪再注册，与 cordis 依赖声明语义一致）；
+  // 若宿主 ctx 没有 inject（例如精简测试上下文），直接尝试注册一次，失败就跳过。
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['skills'], (skillCtx) => {
+      registerSkill(skillCtx, cfg)
+    })
+  } else {
+    registerSkill(ctx, cfg)
+  }
 
   ctx.effect(() => () => {
     for (const dispose of disposers.reverse()) {

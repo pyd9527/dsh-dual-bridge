@@ -3,6 +3,9 @@
 # 依赖 ds-harness-remote（提供通道与身份）。本插件自身不建立新身份、不重新登录、
 # 不切换本机 UI 的远端选择状态。
 #
+# 产出：6 个模型可见工具（dual_status / dual_peers / dual_workspaces / dual_sessions /
+# dual_send / dual_inbox）+ 1 条技能（dual-bridge，教模型怎么用这套工具）。
+#
 # 安装方式（三选一）：
 #   ① 会话内让 Agent 用 plugin_manager 的 install_bundle + 绝对包目录 target
 #   ② dsh plugin --profile <profile> add <本包目录绝对路径>
@@ -13,7 +16,7 @@
 #     无需重启（用 cordis_inspect_query 的 host/listTools 可直接看到 6 个 dual_* 工具）。
 #   · 装完之后又改了插件代码：运行中的 Host 不会重新加载（实测 toggle 插件、甚至换入口
 #     文件名都不生效）。此时必须完全退出 DSH Desktop 再打开。
-#     判断方法：dual_status 输出应有「运行时来源 : …」与「插件版本 : 0.1.2」两行。
+#     判断方法：dual_status 输出应有「运行时来源 : …」与「插件版本 : 0.2.0」两行。
 - insert:
     - id: dual-bridge
       name: 'dsh-dual-bridge'

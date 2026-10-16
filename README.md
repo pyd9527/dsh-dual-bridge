@@ -3,7 +3,7 @@
 把已装的 `ds-harness-remote` 通道封装成模型可以直接调用的工具：跨机发一段话、取回对端回复、列对端工作区与会话。复用现有身份与 relay，不新建身份、不重复登录、不改动原插件与原脚本。
 
 - 包类型：Host 插件（无 UI 客户端代码），`export function apply(ctx, config)`
-- 当前版本：`0.1.2`
+- 当前版本：`0.2.0`
 - 依赖：本机已装并已登录 `ds-harness-remote`。插件优先 `ctx.get('dshRemoteClient')` 复用宿主的运行时；拿不到就自建一个 `ClientModeRuntime`，**共用同一份身份目录**（`$DSH_HOME\remote\servers\<serverHash>\client`），不新建身份、不重新登录
 - 不提供：新账号体系、新的 relay 服务、对端的任何写操作（只发消息、建会话、读会话快照）
 
@@ -81,8 +81,8 @@ target = "D:\plugins\dsh-dual-bridge"
 让模型调用 `dual_status`，应看到本机 Remote 身份、relay 连接状态、运行时来源与插件版本；再调 `dual_peers`，应看到对端为 `在线`。
 
 > ⚠ **例外：改过插件自身的代码之后，必须完全退出 DSH Desktop 再打开。**
-> 首次安装（`install_bundle` 返回 `application: "applied"`）确实是热加载、装完即用；但**装完之后再改插件代码，运行中的 Host 不会重新加载** —— 实测改内容后 toggle 插件不生效、把入口改名（`impl-0.1.2.js`）不生效、再改名（`bridge.js`）并改 `package.json` 的 `exports` 也不生效，`dual_status` 始终返回旧版输出（Host 里的 ESM 模块缓存不会被清掉）。而用新进程 `import()` 同一个文件，新版代码立刻生效。⇒ **改代码后一律完全退出 DSH Desktop 再打开。**
-> **判断方法**：`dual_status` 输出里应有「运行时来源 : …」与「插件版本 : 0.1.2」两行。**没有这两行，就是在跑旧代码。**
+> 首次安装（`install_bundle` 返回 `application: "applied"`）确实是热加载、装完即用；但**装完之后再改插件代码，运行中的 Host 不会重新加载** —— 实测改内容后 toggle 插件不生效、把入口改名（`impl-0.2.0.js`）不生效、再改名（`bridge.js`）并改 `package.json` 的 `exports` 也不生效，`dual_status` 始终返回旧版输出（Host 里的 ESM 模块缓存不会被清掉）。而用新进程 `import()` 同一个文件，新版代码立刻生效。⇒ **改代码后一律完全退出 DSH Desktop 再打开。**
+> **判断方法**：`dual_status` 输出里应有「运行时来源 : …」与「插件版本 : 0.2.0」两行。**没有这两行，就是在跑旧代码。**
 
 **如果工具没出现**，再完全退出 DSH Desktop（确认进程真的退出，含托盘与后台进程）重新打开一次。
 
@@ -166,7 +166,13 @@ target = "D:\plugins\dsh-dual-bridge"
 
 `dual_send` 的返回包含：对端名称、会话 id（标注新建/复用）、工作区（自动选取时会注明）、模型、耗时、对端用到的工具，然后是 `=== 对端回复 ===` 正文。
 
-### 实测样例（v0.1.2，私人机 → 公司机）
+### 附带一条技能（skill）
+
+插件还会注册一条名为 **`dual-bridge`** 的技能（`ctx.skills.register`，`modelInvocable` + `userInvocable`），内容是「这套工具怎么用、什么顺序调、有哪些坑」——模型不必翻这份 README 就知道该先 `dual_status`、要复用会话就把 `session` 传进去、`dual_inbox` 是只读的、跨机消息要带方向标记。
+
+技能里会**代入本机实际配置**（当前 `defaultPeer` / `defaultSession` / `defaultWorkspace` / `defaultModel` / `autoWorkspace`），所以换机器后技能内容自动跟着变，不用手工维护。若 profile 里没有 `skills` 服务，技能注册会被静默跳过，**6 个工具照常可用**。
+
+### 实测样例（v0.2.0，私人机 → 公司机）
 
 以下是真机跑通的行为，可当作「它能干什么」的参考。具体 id 请以本机 `dual_peers` / `dual_workspaces` / `dual_sessions` 的输出为准，不写进文档。
 
@@ -225,7 +231,7 @@ target = "D:\plugins\dsh-dual-bridge"
 | --- | --- |
 | `package.json` | 包清单，声明 `dsh.bundle.patch`、`icon`、`exports` |
 | `cordis.patch.yml` | bundle 补丁，插入插件行（entry id 为 `dual-bridge`） |
-| `index.js` | Host 插件实现（注册 6 个工具） |
+| `index.js` | Host 插件实现（注册 6 个工具 + 1 条技能 `dual-bridge`） |
 | `install.mjs` | **推荐装机入口**：体检 + 找 `dsh` CLI + 缺 `ds-harness-remote` 就自动补装 + 调 `dsh plugin --profile <p> add <目录>`（可 `--check` 只体检）。装完也可用 `dsh-dual-bridge-install` 调用 |
 | `locale\zh.json` / `locale\en.json` | 插件卡片标题与描述。**必须写成 `{"meta":{"title":"…","description":"…"}}` 包裹** —— 本 build 的读取器只读 `meta.title` / `meta.description`，平铺在顶层的 `title` / `description` 取不到 |
 | `icon.svg` | 卡片图标 |
